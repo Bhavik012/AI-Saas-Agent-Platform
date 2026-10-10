@@ -26,11 +26,13 @@ export const HomeView = () => {
 
     const [
         { data: meetingsData },
-        { data: agentsData }
+        { data: agentsData },
+        { data: activeMeetingsData }
     ] = useSuspenseQueries({
         queries: [
             trpc.meetings.getMany.queryOptions({ pageSize: 5 }),
             trpc.agents.getMany.queryOptions({ pageSize: 5 }),
+            trpc.meetings.getMany.queryOptions({ status: "active", pageSize: 1 }),
         ]
     });
 
@@ -101,7 +103,7 @@ export const HomeView = () => {
                     </CardHeader>
                     <CardContent>
                         <div className="text-3xl font-bold">
-                            {meetingsData.items.filter(m => m.status === "active").length}
+                            {activeMeetingsData.total}
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">Ongoing sessions</p>
                     </CardContent>

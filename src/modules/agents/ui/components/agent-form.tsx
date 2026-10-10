@@ -52,14 +52,14 @@ export const AgentForm = ({
                     trpc.agents.getMany.queryOptions({}),
                 );
 
+                toast.success("Agent created successfully");
                 onSuccess?.();
             },
             onError: (error) => {
-                toast.error(error.message)
+                toast.error(error.message);
             },
         }),
     );
-
 
     const updateAgent = useMutation(
         trpc.agents.update.mutationOptions({
@@ -71,22 +71,23 @@ export const AgentForm = ({
                 if (initialValues?.id) {
                     await queryClient.invalidateQueries(
                         trpc.agents.getOne.queryOptions({ id: initialValues.id }),
-                    )
+                    );
                 }
+                toast.success("Agent updated successfully");
                 onSuccess?.();
             },
             onError: (error) => {
-                toast.error(error.message)
+                toast.error(error.message);
             },
         }),
     );
 
-    const form = useForm<any>({
+    const form = useForm<z.infer<typeof agentsInsertSchema>>({
         resolver: zodResolver(agentsInsertSchema),
         defaultValues: {
             name: initialValues?.name ?? "",
             instructions: initialValues?.instructions ?? "",
-            voice: (initialValues as any)?.voice ?? "ash",
+            voice: initialValues?.voice ?? "ash",
         },
     });
     const isEdit = !!initialValues?.id;

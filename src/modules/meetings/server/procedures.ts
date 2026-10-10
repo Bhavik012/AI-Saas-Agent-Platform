@@ -9,35 +9,35 @@ import { DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE } from "@
 import { meetingsInsertSchema, meetingsUpdateSchema } from "../schemas";
 import { MeetingStatus } from "../types";
 import { streamVideo } from "@/lib/stream-video";
-import { generateAvatarUri } from "@/lib/avatar";
 import { AccessToken } from "livekit-server-sdk";
 import { geminiModel } from "@/lib/gemini";
-
+import { generateAvatarUri } from "@/lib/avatar";
+import {
+    assertMeetingOwnership,
+    assertAgentOwnership,
+    buildStreamUserPayload,
+    buildLiveKitGrants,
+    formatTranscriptForSummary,
+    buildSummaryPrompt,
+} from "./authorization";
 
 export const meetingsRouter = createTRPCRouter({
     generateToken: protectedProcedure.mutation(async ({ ctx }) => {
+        // Upsert user with standard role (not admin) to prevent privilege escalation
         await streamVideo.upsertUsers([
-            {
-                id: ctx.auth.user.id,
-                name: ctx.auth.user.name,
-                role: "admin",
-                image:
-                    ctx.auth.user.image ??
-                    generateAvatarUri({ seed: ctx.auth.user.name, variant: "initials" }),
-            },
+            buildStreamUserPayload(ctx.auth.user),
         ]);
 
-        const expirationTime = Math.floor(Date.now() / 1000) + 3600;
-        const issuedAt = Math.floor(Date.now() / 1000) - 60;
+        const validityInSeconds = 3600; // 1 hour token validity
 
         const token = streamVideo.generateUserToken({
             user_id: ctx.auth.user.id,
-            exp: expirationTime,
-            validity_in_seconds: issuedAt,
+            validity_in_seconds: validityInSeconds,
         });
 
         return token;
     }),
+
     remove: protectedProcedure
         .input(z.object({ id: z.string() }))
         .mutation(async ({ ctx, input }) => {
@@ -54,8 +54,7 @@ export const meetingsRouter = createTRPCRouter({
             if (!removedMeeting) {
                 throw new TRPCError({
                     code: "NOT_FOUND",
-                    message: "Meeting not found"
-
+                    message: "Meeting not found",
                 });
             }
             return removedMeeting;
@@ -64,12 +63,41 @@ export const meetingsRouter = createTRPCRouter({
     update: protectedProcedure
         .input(meetingsUpdateSchema)
         .mutation(async ({ ctx, input }) => {
+            // Remap agentId to agentsId to match database schema column and update updatedAt
+            const { id, agentId, ...rest } = input;
+            const updateValues: Record<string, unknown> = {
+                ...rest,
+                updatedAt: new Date(),
+            };
+
+            if (agentId) {
+                // Verify the agent belongs to the user
+                const [existingAgent] = await db
+                    .select()
+                    .from(agents)
+                    .where(
+                        and(
+                            eq(agents.id, agentId),
+                            eq(agents.userId, ctx.auth.user.id),
+                        )
+                    );
+
+                if (!existingAgent) {
+                    throw new TRPCError({
+                        code: "NOT_FOUND",
+                        message: "Agent not found",
+                    });
+                }
+
+                updateValues.agentsId = agentId;
+            }
+
             const [updatedMeeting] = await db
                 .update(meetings)
-                .set(input)
+                .set(updateValues)
                 .where(
                     and(
-                        eq(meetings.id, input.id),
+                        eq(meetings.id, id),
                         eq(meetings.userId, ctx.auth.user.id),
                     ),
                 )
@@ -78,8 +106,7 @@ export const meetingsRouter = createTRPCRouter({
             if (!updatedMeeting) {
                 throw new TRPCError({
                     code: "NOT_FOUND",
-                    message: "Meeting not found"
-
+                    message: "Meeting not found",
                 });
             }
             return updatedMeeting;
@@ -88,14 +115,26 @@ export const meetingsRouter = createTRPCRouter({
     create: protectedProcedure
         .input(meetingsInsertSchema)
         .mutation(async ({ input, ctx }) => {
+            // Verify that the user owns the agent being assigned
+            const [existingAgent] = await db
+                .select({ id: agents.id, userId: agents.userId, name: agents.name })
+                .from(agents)
+                .where(
+                    and(
+                        eq(agents.id, input.agentId),
+                        eq(agents.userId, ctx.auth.user.id),
+                    )
+                );
+
+            assertAgentOwnership(existingAgent, ctx.auth.user.id);
+
             const [createdMeeting] = await db
                 .insert(meetings)
                 .values({
-                    ...input,
+                    name: input.name,
                     userId: ctx.auth.user.id,
                     agentsId: input.agentId,
                 })
-
                 .returning();
 
             const call = streamVideo.video.call("default", createdMeeting.id);
@@ -104,13 +143,13 @@ export const meetingsRouter = createTRPCRouter({
                     created_by_id: ctx.auth.user.id,
                     custom: {
                         meetingId: createdMeeting.id,
-                        meetingName: createdMeeting.name
+                        meetingName: createdMeeting.name,
                     },
                     settings_override: {
                         transcription: {
                             language: "en",
                             mode: "auto-on",
-                            closed_caption_mode: "auto-on"
+                            closed_caption_mode: "auto-on",
                         },
                         recording: {
                             mode: "auto-on",
@@ -118,19 +157,7 @@ export const meetingsRouter = createTRPCRouter({
                         },
                     },
                 },
-            })
-
-            const [existingAgent] = await db
-                .select()
-                .from(agents)
-                .where(eq(agents.id, createdMeeting.agentsId));
-
-            if (!existingAgent) {
-                throw new TRPCError({
-                    code: "NOT_FOUND",
-                    message: "AGENT NOT found",
-                });
-            }
+            });
 
             await streamVideo.upsertUsers([
                 {
@@ -146,6 +173,7 @@ export const meetingsRouter = createTRPCRouter({
 
             return createdMeeting;
         }),
+
     getOne: protectedProcedure
         .input(z.object({ id: z.string() }))
         .query(async ({ input, ctx }) => {
@@ -168,11 +196,9 @@ export const meetingsRouter = createTRPCRouter({
                 throw new TRPCError({ code: "NOT_FOUND", message: "Meeting not found" });
             }
 
-
             return existingMeeting;
-
-
         }),
+
     getMany: protectedProcedure
         .input(
             z.object({
@@ -191,7 +217,6 @@ export const meetingsRouter = createTRPCRouter({
                         MeetingStatus.Completed,
                         MeetingStatus.Cancelled,
                         MeetingStatus.Processing,
-
                     ])
                     .nullish(),
             })
@@ -217,7 +242,7 @@ export const meetingsRouter = createTRPCRouter({
                 )
                 .orderBy(desc(meetings.createdAt), desc(meetings.id))
                 .limit(pageSize)
-                .offset((page - 1) * pageSize)
+                .offset((page - 1) * pageSize);
 
             const [total] = await db
                 .select({ count: count() })
@@ -240,13 +265,27 @@ export const meetingsRouter = createTRPCRouter({
                 totalPages,
             };
         }),
+
     addTranscription: protectedProcedure
         .input(z.object({
             meetingId: z.string(),
-            text: z.string(),
+            text: z.string().min(1, "Text is required").max(5000, "Text exceeds character limit"),
             agentId: z.string().nullish(),
         }))
         .mutation(async ({ input, ctx }) => {
+            // Verify meeting ownership to prevent cross-tenant transcript injection
+            const [meeting] = await db
+                .select({ id: meetings.id, userId: meetings.userId })
+                .from(meetings)
+                .where(
+                    and(
+                        eq(meetings.id, input.meetingId),
+                        eq(meetings.userId, ctx.auth.user.id),
+                    )
+                );
+
+            assertMeetingOwnership(meeting, ctx.auth.user.id);
+
             const [newTranscription] = await db
                 .insert(transcriptions)
                 .values({
@@ -259,20 +298,48 @@ export const meetingsRouter = createTRPCRouter({
 
             return newTranscription;
         }),
+
     getTranscriptions: protectedProcedure
         .input(z.object({ meetingId: z.string() }))
         .query(async ({ input, ctx }) => {
+            // Verify meeting ownership to prevent unauthorized transcript access (IDOR fix)
+            const [meeting] = await db
+                .select({ id: meetings.id, userId: meetings.userId })
+                .from(meetings)
+                .where(
+                    and(
+                        eq(meetings.id, input.meetingId),
+                        eq(meetings.userId, ctx.auth.user.id),
+                    )
+                );
+
+            assertMeetingOwnership(meeting, ctx.auth.user.id);
+
             return await db
                 .select()
                 .from(transcriptions)
                 .where(eq(transcriptions.meetingId, input.meetingId))
                 .orderBy(desc(transcriptions.timestamp));
         }),
+
     generateLiveKitToken: protectedProcedure
         .input(z.object({
             meetingId: z.string(),
         }))
         .mutation(async ({ input, ctx }) => {
+            // Verify meeting ownership before issuing WebRTC join token (IDOR fix)
+            const [meeting] = await db
+                .select({ id: meetings.id, userId: meetings.userId })
+                .from(meetings)
+                .where(
+                    and(
+                        eq(meetings.id, input.meetingId),
+                        eq(meetings.userId, ctx.auth.user.id),
+                    )
+                );
+
+            assertMeetingOwnership(meeting, ctx.auth.user.id);
+
             const at = new AccessToken(
                 process.env.LIVEKIT_API_KEY!,
                 process.env.LIVEKIT_API_SECRET!,
@@ -282,19 +349,28 @@ export const meetingsRouter = createTRPCRouter({
                 }
             );
 
-            at.addGrant({
-                roomJoin: true,
-                room: input.meetingId,
-                canPublish: true,
-                canSubscribe: true,
-                canPublishData: true,
-            });
+            at.addGrant(buildLiveKitGrants(input.meetingId));
 
             return await at.toJwt();
         }),
+
     generateSummary: protectedProcedure
         .input(z.object({ meetingId: z.string() }))
         .mutation(async ({ input, ctx }) => {
+            // 1. Verify meeting ownership BEFORE generating summary (IDOR fix)
+            const [meeting] = await db
+                .select({ id: meetings.id, userId: meetings.userId })
+                .from(meetings)
+                .where(
+                    and(
+                        eq(meetings.id, input.meetingId),
+                        eq(meetings.userId, ctx.auth.user.id),
+                    )
+                );
+
+            assertMeetingOwnership(meeting, ctx.auth.user.id);
+
+            // 2. Fetch transcriptions for the meeting
             const meetingTranscripts = await db
                 .select()
                 .from(transcriptions)
@@ -304,20 +380,77 @@ export const meetingsRouter = createTRPCRouter({
             if (meetingTranscripts.length === 0) {
                 throw new TRPCError({
                     code: "BAD_REQUEST",
-                    message: "No transcriptions found for this meeting."
+                    message: "No transcriptions found for this meeting.",
                 });
             }
 
-            const transcriptText = meetingTranscripts.map(t => t.text).join("\n");
+            // 3. Length bounding & token limit protection (max 30,000 characters)
+            const transcriptText = formatTranscriptForSummary(meetingTranscripts);
 
-            const prompt = `Summarize the following meeting transcript in a professional and concise manner, highlighting key decisions and action items:\n\n${transcriptText}`;
+            // 4. Prompt injection protection: isolate content with XML delimiters and framing
+            const prompt = buildSummaryPrompt(transcriptText);
 
-            const result = await geminiModel.generateContent(prompt);
-            const summary = result.response.text();
+            // 5. Safe Gemini call with timeout and typed error handling
+            let summary: string;
+            try {
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), 30000)
+                );
 
+                const generatePromise = geminiModel.generateContent(prompt);
+                const result = await Promise.race([generatePromise, timeoutPromise]);
+
+                const response = result.response;
+                if (!response || !response.candidates || response.candidates.length === 0) {
+                    throw new Error("EMPTY_GEMINI_RESPONSE");
+                }
+
+                const candidate = response.candidates[0];
+                if (candidate.finishReason === "SAFETY") {
+                    throw new TRPCError({
+                        code: "BAD_REQUEST",
+                        message: "Summary could not be generated due to content safety restrictions.",
+                    });
+                }
+
+                summary = response.text();
+                if (!summary || !summary.trim()) {
+                    throw new Error("EMPTY_SUMMARY_TEXT");
+                }
+            } catch (error: unknown) {
+                if (error instanceof TRPCError) throw error;
+
+                const err = error as { status?: number; message?: string };
+                console.error(`Gemini summary generation failed: ${err.message ?? "Unknown error"}`);
+
+                if (err.message === "GEMINI_TIMEOUT") {
+                    throw new TRPCError({
+                        code: "TIMEOUT",
+                        message: "AI summary generation timed out. Please try again.",
+                    });
+                }
+
+                if (
+                    err.status === 429 ||
+                    err.message?.includes("quota") ||
+                    err.message?.includes("RESOURCE_EXHAUSTED")
+                ) {
+                    throw new TRPCError({
+                        code: "TOO_MANY_REQUESTS",
+                        message: "AI service is currently busy or rate-limited. Please try again shortly.",
+                    });
+                }
+
+                throw new TRPCError({
+                    code: "INTERNAL_SERVER_ERROR",
+                    message: "Failed to generate meeting summary. Please try again later.",
+                });
+            }
+
+            // 6. Update meeting record with summary and completed status
             await db
                 .update(meetings)
-                .set({ summary, status: "completed" })
+                .set({ summary, status: "completed", updatedAt: new Date() })
                 .where(
                     and(
                         eq(meetings.id, input.meetingId),

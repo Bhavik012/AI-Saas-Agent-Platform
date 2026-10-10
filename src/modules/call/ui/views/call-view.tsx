@@ -26,6 +26,17 @@ export const CallView = ({
         );
     }
 
+    if (data.status === "cancelled") {
+        return (
+            <div className="flex h-screen items-center justify-center">
+                <ErrorState
+                    title="Meeting was cancelled"
+                    description="This meeting has been cancelled and cannot be joined"
+                />
+            </div>
+        );
+    }
+
     return <CallProvider meetingId={meetingId} meetingName={data.name} />
 };
 

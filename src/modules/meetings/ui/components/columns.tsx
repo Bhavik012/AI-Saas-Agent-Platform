@@ -82,7 +82,7 @@ export const columns: ColumnDef<MeetingGetMany[number]>[] = [
                 >
                     <Icon
                         className={cn(
-                            row.original.status === "processing" && "animated-spin"
+                            row.original.status === "processing" && "animate-spin"
                         )}
                     />
                     {row.original.status}
@@ -92,7 +92,7 @@ export const columns: ColumnDef<MeetingGetMany[number]>[] = [
     },
     {
         accessorKey: "duration",
-        header: "duration",
+        header: "Duration",
         cell: ({ row }) => (
             <Badge
                 variant="outline"

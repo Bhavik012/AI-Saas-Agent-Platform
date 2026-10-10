@@ -10,7 +10,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "dev:webhook": "ngrok http 3000 --url=marg-originative-guilelessly.ngrok-free.dev",
-    "agent": "tsx scripts/agent.ts dev"
+    "agent": "tsx scripts/agent.ts dev",
+    "test": "tsx --conditions=react-server --env-file=.env scripts/test-authorization-and-ai.ts"
   },
   "dependencies": {
     "@dicebear/collection": "^9.2.4",

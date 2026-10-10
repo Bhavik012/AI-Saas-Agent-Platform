@@ -1,4 +1,0 @@
-[17:03:31.822] [32mINFO[39m (19420): [36mstarting worker[39m
-    version: "0.1.0"
-[17:03:31.839] [32mINFO[39m (19420): [36mServer is listening on port 54504[39m
-[17:03:31.842] [41mFATAL[49m (19420): [36mclosing worker due to error.[39m

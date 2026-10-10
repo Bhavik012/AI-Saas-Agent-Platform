@@ -5,6 +5,11 @@ import { db } from "@/db";
 import { agents, meetings, transcriptions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
+// Ensure Google API key is set for @livekit/agents-plugin-google
+if (!process.env.GOOGLE_API_KEY && process.env.GEMINI_API_KEY) {
+  process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+}
+
 export default defineAgent({
   entry: async (ctx) => {
     await ctx.connect();
@@ -54,15 +59,19 @@ export default defineAgent({
       instructions: agentData.instructions,
     });
 
-    // Logging transcripts to DB
+    // Logging transcripts to DB with error handling to avoid unhandled rejections
     (session as any).on("user_transcription", async (transcript: any) => {
-      if (transcript.text.trim()) {
-        await db.insert(transcriptions).values({
-          meetingId: meeting.id,
-          agentId: agentData.id,
-          text: transcript.text,
-        });
-        console.log(`✍️ Saved transcript: ${transcript.text.substring(0, 30)}...`);
+      try {
+        if (transcript.text && transcript.text.trim()) {
+          await db.insert(transcriptions).values({
+            meetingId: meeting.id,
+            agentId: agentData.id,
+            text: transcript.text,
+          });
+          console.log(`✍️ Saved transcript: ${transcript.text.substring(0, 30)}...`);
+        }
+      } catch (err) {
+        console.error("Failed to save transcript to DB:", err);
       }
     });
 
@@ -77,7 +86,7 @@ export default defineAgent({
 
 cli.runApp(new WorkerOptions({
   agent: __filename,
-  wsURL: process.env.LIVEKIT_WS_URL || process.env.LIVEKIT_URL,
+  wsURL: process.env.LIVEKIT_WS_URL || process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_URL,
   apiKey: process.env.LIVEKIT_API_KEY,
   apiSecret: process.env.LIVEKIT_API_SECRET
 }));

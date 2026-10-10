@@ -1,17 +1,16 @@
-import { SearchIcon } from "lucide-react"
+import { SearchIcon } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { useMeetingsFilters } from "../../hooks/use-meetings-filters";
 
-import { Input } from "@/components/ui/input"
-
-import { useMeetingsFilters } from "../../hooks/use-meetings-filters"
-
-export const MeetingsSeachFilter = () => {
+export const MeetingsSearchFilter = () => {
     const [filters, setFilters] = useMeetingsFilters();
 
     return (
         <div className="relative">
             <Input
                 placeholder="Filter by name"
-                className="h-9 bg-white w-[200px] pl-7"
+                aria-label="Filter meetings by name"
+                className="h-9 bg-background w-[200px] pl-7"
                 value={filters.search}
                 onChange={(e) => setFilters({ search: e.target.value })}
             />
@@ -19,3 +18,6 @@ export const MeetingsSeachFilter = () => {
         </div>
     );
 };
+
+// Backward-compatibility alias for the original misspelled export
+export const MeetingsSeachFilter = MeetingsSearchFilter;

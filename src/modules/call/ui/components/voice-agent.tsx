@@ -20,18 +20,47 @@ interface Props {
 export const VoiceAgent = ({ meetingId }: Props) => {
     const trpc = useTRPC();
     const [token, setToken] = useState<string>();
+    const [error, setError] = useState<string | null>(null);
 
     const { mutateAsync: generateToken } = useMutation(
         trpc.meetings.generateLiveKitToken.mutationOptions()
     );
 
+    const livekitUrl =
+        process.env.NEXT_PUBLIC_LIVEKIT_URL ||
+        process.env.LIVEKIT_WS_URL;
+
     useEffect(() => {
+        let isMounted = true;
         const fetchToken = async () => {
-            const t = await generateToken({ meetingId });
-            setToken(t);
+            try {
+                setError(null);
+                const t = await generateToken({ meetingId });
+                if (isMounted) {
+                    setToken(t);
+                }
+            } catch (err: unknown) {
+                if (isMounted) {
+                    const message = err instanceof Error ? err.message : "Failed to connect AI Agent";
+                    setError(message);
+                }
+            }
         };
         fetchToken();
+
+        return () => {
+            isMounted = false;
+        };
     }, [meetingId, generateToken]);
+
+    if (error) {
+        return (
+            <div className="flex flex-col items-center justify-center p-4 bg-destructive/10 text-destructive rounded-xl text-center text-xs gap-y-2">
+                <p>AI Agent Connection Error</p>
+                <p className="text-[10px] opacity-80">{error}</p>
+            </div>
+        );
+    }
 
     if (!token) {
         return (
@@ -42,10 +71,18 @@ export const VoiceAgent = ({ meetingId }: Props) => {
         );
     }
 
+    if (!livekitUrl) {
+        return (
+            <div className="flex items-center gap-x-2 text-sm text-amber-500">
+                LiveKit server URL not configured
+            </div>
+        );
+    }
+
     return (
         <LiveKitRoom
             token={token}
-            serverUrl={process.env.NEXT_PUBLIC_LIVEKIT_URL}
+            serverUrl={livekitUrl}
             connect={true}
             audio={true}
             video={false}

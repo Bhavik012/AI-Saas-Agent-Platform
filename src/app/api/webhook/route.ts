@@ -10,18 +10,33 @@ import {
 import { db } from "@/db";
 import { agents, meetings } from "@/db/schema";
 import { streamVideo } from "@/lib/stream-video";
+import { geminiModel } from "@/lib/gemini";
 import { CallTranscriptionReadyEvent } from "@stream-io/video-react-sdk";
-
-// ✅ NEW: Gemini import
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 function verifySignatureWithSDK(body: string, signature: string): boolean {
     return streamVideo.verifyWebhook(body, signature);
 }
 
+// SSRF Protection: Validate that URLs are HTTPS and from trusted domains
+function isValidTranscriptionUrl(urlString: string): boolean {
+    try {
+        const parsed = new URL(urlString);
+        if (parsed.protocol !== "https:") return false;
+        // Ensure hostname ends with trusted Stream or CDN domains
+        const validHosts = ["stream-io-cdn.com", "getstream.io", "amazonaws.com"];
+        return validHosts.some(
+            (domain) => parsed.hostname === domain || parsed.hostname.endsWith(`.${domain}`)
+        );
+    } catch {
+        return false;
+    }
+}
+
 export async function POST(req: NextRequest) {
     const signature = req.headers.get("stream-signature");
-    if (!signature) return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+    if (!signature) {
+        return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+    }
 
     const body = await req.text();
     if (!verifySignatureWithSDK(body, signature)) {
@@ -37,10 +52,24 @@ export async function POST(req: NextRequest) {
 
     const eventType = (payload as { type?: string })?.type;
 
-    if (eventType === "call.session_started") {
+    // Normalizing event types to support both dot and underscore notations
+    const isSessionStarted =
+        eventType === "call.session_started" || eventType === "call_session_started";
+    const isParticipantLeft =
+        eventType === "call.session_participant_left" || eventType === "call_session_participant_left";
+    const isSessionEnded =
+        eventType === "call.session_ended" || eventType === "call_session_ended";
+    const isTranscriptionReady =
+        eventType === "call.transcription_ready" || eventType === "call_transcription_ready";
+    const isRecordingReady =
+        eventType === "call.recording_ready" || eventType === "call_recording_ready";
+
+    if (isSessionStarted) {
         const event = payload as CallSessionStartedEvent;
         const meetingId = event.call.custom?.meetingId;
-        if (!meetingId) return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        if (!meetingId) {
+            return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        }
 
         const [existingMeeting] = await db
             .select()
@@ -55,46 +84,58 @@ export async function POST(req: NextRequest) {
                 )
             );
 
-        if (!existingMeeting) return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+        if (!existingMeeting) {
+            return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+        }
 
         await db
             .update(meetings)
-            .set({ status: "active" })
+            .set({ status: "active", startedAt: new Date(), updatedAt: new Date() })
             .where(eq(meetings.id, existingMeeting.id));
 
-        // ❌ REMOVED: OpenAI realtime agent join
-        // const call = streamVideo.video.call("default", meetingId);
-        // await streamVideo.video.connectOpenAi({ ... });
+        const [existingAgent] = await db
+            .select()
+            .from(agents)
+            .where(eq(agents.id, existingMeeting.agentsId));
 
-        // If you want to persist agent instructions elsewhere, you still have existingAgent:
-        const [existingAgent] = await db.select().from(agents).where(eq(agents.id, existingMeeting.agentsId));
-        if (!existingAgent) return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+        if (!existingAgent) {
+            return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+        }
 
-    } else if (eventType === "call_session_participant_left") {
+    } else if (isParticipantLeft) {
         const event = payload as CallSessionParticipantLeftEvent;
-        const meetingId = event.call_cid.split(":")[1];
-        if (!meetingId) return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        const meetingId = event.call_cid ? event.call_cid.split(":")[1] : undefined;
+        if (!meetingId) {
+            return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        }
 
         const call = streamVideo.video.call("default", meetingId);
         await call.end();
 
-    } else if (eventType === "call_session_ended") {
+    } else if (isSessionEnded) {
         const event = payload as CallEndedEvent;
         const meetingId = event.call.custom?.meetingId;
-        if (!meetingId) return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        if (!meetingId) {
+            return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        }
 
         await db
             .update(meetings)
-            .set({ status: "processing", endedAt: new Date() })
+            .set({ status: "processing", endedAt: new Date(), updatedAt: new Date() })
             .where(and(eq(meetings.id, meetingId), eq(meetings.status, "active")));
 
-    } else if (eventType === "call.transcription_ready") {
+    } else if (isTranscriptionReady) {
         const event = payload as CallTranscriptionReadyEvent;
-        const meetingId = event.call_cid.split(":")[1];
+        const meetingId = event.call_cid ? event.call_cid.split(":")[1] : undefined;
+        if (!meetingId) {
+            return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        }
+
+        const transcriptUrl = event.call_transcription?.url;
 
         const [updatedMeeting] = await db
             .update(meetings)
-            .set({ transcriptUrl: event.call_transcription.url })
+            .set({ transcriptUrl, updatedAt: new Date() })
             .where(eq(meetings.id, meetingId))
             .returning();
 
@@ -102,41 +143,55 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
         }
 
-        // ✅ NEW: Gemini summary of transcript (optional but recommended)
-        try {
-            const transcriptText = await fetch(event.call_transcription.url).then((r) => r.text());
+        // Generate AI summary if URL is safe and available
+        if (transcriptUrl && isValidTranscriptionUrl(transcriptUrl)) {
+            try {
+                const transcriptRes = await fetch(transcriptUrl, {
+                    signal: AbortSignal.timeout(10000), // 10s timeout
+                });
 
-            const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                if (transcriptRes.ok) {
+                    const rawTranscript = await transcriptRes.text();
+                    const boundedTranscript = rawTranscript.slice(0, 30000);
 
-            const prompt = `
-Summarize this meeting briefly.
-Return sections:
-- Title
-- TL;DR (3 bullets)
-- Action items (bullets with owners if possible)
-- Decisions
+                    const prompt = `You are a professional meeting assistant.
+Summarize this meeting concisely based on the transcript below:
+- Executive Summary (2-3 sentences)
+- Key Decisions
+- Action Items
 
 Transcript:
-${transcriptText}
-      `;
+${boundedTranscript}`;
 
-            const res = await model.generateContent(prompt);
-            const summary = res.response.text();
+                    const res = await geminiModel.generateContent(prompt);
+                    const summary = res.response.text();
 
-            // Make sure 'summary' column exists in your 'meetings' table
-            await db.update(meetings).set({ summary }).where(eq(meetings.id, meetingId));
-        } catch (e) {
-            console.error("Gemini summary error:", e);
+                    if (summary) {
+                        await db
+                            .update(meetings)
+                            .set({ summary, status: "completed", updatedAt: new Date() })
+                            .where(eq(meetings.id, meetingId));
+                    }
+                }
+            } catch (e) {
+                console.error("Webhook Gemini summary generation error:", e);
+            }
         }
 
-    } else if (eventType === "call_recording_ready") {
+    } else if (isRecordingReady) {
         const event = payload as CallRecordingReadyEvent;
-        const meetingId = event.call_cid.split(":")[1];
+        const meetingId = event.call_cid ? event.call_cid.split(":")[1] : undefined;
+        if (!meetingId) {
+            return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+        }
 
+        // Correct column: recordingUrl instead of transcriptUrl
         await db
             .update(meetings)
-            .set({ transcriptUrl: event.call_recording.url as unknown as string })
+            .set({
+                recordingUrl: event.call_recording?.url,
+                updatedAt: new Date(),
+            })
             .where(eq(meetings.id, meetingId));
     }
 

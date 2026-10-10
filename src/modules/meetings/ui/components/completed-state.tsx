@@ -35,7 +35,7 @@ export const CompletedState = ({ meetingId, summary: initialSummary }: Props) =>
     return (
         <div className="space-y-6">
             {/* Summary Section */}
-            <div className="bg-white rounded-xl border p-6 shadow-sm">
+            <div className="bg-card rounded-xl border p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-x-2">
                         <BrainIcon className="size-5 text-blue-600" />
@@ -68,7 +68,7 @@ export const CompletedState = ({ meetingId, summary: initialSummary }: Props) =>
             </div>
 
             {/* Transcripts Section */}
-            <div className="bg-white rounded-xl border p-6 shadow-sm">
+            <div className="bg-card rounded-xl border p-6 shadow-sm">
                 <div className="flex items-center gap-x-2 mb-4">
                     <MessageSquareIcon className="size-5 text-green-600" />
                     <h3 className="text-lg font-semibold">Meeting Transcripts</h3>

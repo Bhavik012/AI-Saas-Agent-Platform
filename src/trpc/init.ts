@@ -6,7 +6,7 @@ export const createTRPCContext = cache(async () => {
     /**
      * @see: https://trpc.io/docs/server/context
      */
-    return { userId: 'user_123' };
+    return {};
 });
 // Avoid exporting the entire t-object
 // since it's not very descriptive.
@@ -23,9 +23,14 @@ export const createTRPCRouter = t.router;
 export const createCallerFactory = t.createCallerFactory;
 export const baseProcedure = t.procedure;
 export const protectedProcedure = baseProcedure.use(async ({ ctx, next }) => {
-    const session = await auth.api.getSession({
-        headers: await headers(),
-    });
+    // In caller tests or custom context, respect explicit auth session; otherwise query Better Auth via request headers
+    const ctxAuth = "auth" in ctx ? (ctx as { auth?: typeof auth.$Infer.Session | null }).auth : undefined;
+    let session = ctxAuth;
+    if (session === undefined) {
+        session = await auth.api.getSession({
+            headers: await headers(),
+        });
+    }
 
     if (!session) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Unauthorized" });

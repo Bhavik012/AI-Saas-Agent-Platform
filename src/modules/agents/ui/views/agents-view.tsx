@@ -42,7 +42,7 @@ export const AgentsView = () => {
             {data.items.length === 0 && (
                 <EmptyState
                     title="Create your first agent"
-                    description="Create a agent to join you meetings. Each agent will follow your instructions and can interact with participants during the call "
+                    description="Create an agent to join your meetings. Each agent will follow your instructions and can interact with participants during the call."
                 />
             )}
         </div>
@@ -54,7 +54,7 @@ export const AgentsViewLoading = () => {
     return (
         <LoadingState
             title="Loading Agents"
-            description="This may take a fews seconds"
+            description="This may take a few seconds"
         />
     );
 };

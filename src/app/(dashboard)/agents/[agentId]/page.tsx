@@ -27,8 +27,8 @@ const Page = async ({ params }: Props) => {
 
     return (
         <HydrationBoundary state={dehydrate(queryClient)}>
-            <Suspense fallback={<AgentsIdViewError />}>
-                <ErrorBoundary fallback={<AgentsIdViewLoading />}>
+            <Suspense fallback={<AgentsIdViewLoading />}>
+                <ErrorBoundary fallback={<AgentsIdViewError />}>
                     <AgentIdView agentId={agentId} />
                 </ErrorBoundary>
             </Suspense>

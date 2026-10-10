@@ -37,7 +37,7 @@ export const AgentIdViewHeader = ({
                     <BreadcrumbItem>
                         <BreadcrumbLink asChild className="font-medium text-xl">
                             <Link href="/agents">
-                                MyAgents
+                                My Agents
                             </Link>
                         </BreadcrumbLink>
                     </BreadcrumbItem>
@@ -55,20 +55,20 @@ export const AgentIdViewHeader = ({
             </Breadcrumb>
             <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
-                    <Button variant="ghost">
-                        <MoreVerticalIcon />
+                    <Button variant="ghost" size="icon" aria-label="Agent options">
+                        <MoreVerticalIcon className="size-4" />
                     </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
 
                     <DropdownMenuItem onClick={onEdit}>
-                        <PencilIcon className="size-4 text-black" />
+                        <PencilIcon className="size-4" />
                         Edit
                     </DropdownMenuItem>
 
 
-                    <DropdownMenuItem onClick={onRemove}>
-                        <TrashIcon className="size-4 text-black" />
+                    <DropdownMenuItem onClick={onRemove} className="text-destructive focus:text-destructive">
+                        <TrashIcon className="size-4" />
                         Delete
                     </DropdownMenuItem>
                 </DropdownMenuContent>

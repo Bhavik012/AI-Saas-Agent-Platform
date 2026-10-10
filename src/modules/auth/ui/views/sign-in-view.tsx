@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { useRouter } from "next/navigation";
@@ -60,7 +61,8 @@ export const SignInView = () => {
                     router.push("/")
                 },
                 onError: ({ error }) => {
-                    setError(error.message)
+                    setError(error.message);
+                    setPending(false);
                 },
             }
         );
@@ -187,7 +189,7 @@ export const SignInView = () => {
                         </form>
                     </Form>
                     <div className="bg-radial from-sidebar-accent to-sidebar relative hidden md:flex flex-col gap-y-4 items-center justify-center">
-                        <img src="/logo.svg" alt="Image" className="h-[92px] w-[92px]" />
+                        <Image src="/logo.svg" alt="Meet.AI Logo" width={92} height={92} priority />
                         <p className="text-2xl font-semibold text-white">
                             Meet.AI
                         </p>

@@ -58,7 +58,7 @@ export const CallConnect = ({
     }, [userId, userName, userImage, generateToken]);
 
     const [call, setCall] = useState<Call>();
-    useEffect!(() => {
+    useEffect(() => {
         if (!client) return;
 
         const _call = client.call("default", meetingId);
@@ -69,7 +69,6 @@ export const CallConnect = ({
         return () => {
             if (_call.state.callingState !== CallingState.LEFT) {
                 _call.leave();
-                _call.endCall();
                 setCall(undefined);
             }
         };
@@ -78,7 +77,7 @@ export const CallConnect = ({
     if (!client || !call) {
         return (
             <div className="flex h-screen items-center justify-center bg-radial from-sidebar-accent to-sidebar">
-                <LoaderIcon className="sixe-6 animate-spin text-white" />
+                <LoaderIcon className="size-6 animate-spin text-white" />
             </div>
         );
     }

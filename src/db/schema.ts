@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { pgTable, text, timestamp, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, pgEnum, index } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
     id: text('id').primaryKey(),
@@ -20,7 +20,9 @@ export const session = pgTable("session", {
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
     userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' })
-});
+}, (table) => [
+    index("session_user_id_idx").on(table.userId),
+]);
 
 export const account = pgTable("account", {
     id: text('id').primaryKey(),
@@ -36,7 +38,9 @@ export const account = pgTable("account", {
     password: text('password'),
     createdAt: timestamp('created_at').notNull(),
     updatedAt: timestamp('updated_at').notNull()
-});
+}, (table) => [
+    index("account_user_id_idx").on(table.userId),
+]);
 
 export const verification = pgTable("verification", {
     id: text('id').primaryKey(),
@@ -56,10 +60,12 @@ export const agents = pgTable("agents", {
         .notNull()
         .references(() => user.id, { onDelete: "cascade" }),
     instructions: text("instructions").notNull(),
-    voice: text("voice").notNull().default("ash"), // Default voice
+    voice: text("voice").notNull().default("ash"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+    index("agents_user_id_idx").on(table.userId),
+]);
 
 export const meetingStatus = pgEnum("meeting_status", [
     "upcoming",
@@ -88,7 +94,11 @@ export const meetings = pgTable("meetings", {
     summary: text("summary"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+    index("meetings_user_id_idx").on(table.userId),
+    index("meetings_agents_id_idx").on(table.agentsId),
+    index("meetings_status_idx").on(table.status),
+]);
 
 export const transcriptions = pgTable("transcriptions", {
     id: text("id")
@@ -103,5 +113,7 @@ export const transcriptions = pgTable("transcriptions", {
         .references(() => agents.id, { onDelete: "set null" }),
     text: text("text").notNull(),
     timestamp: timestamp("timestamp").notNull().defaultNow(),
-});
-
+}, (table) => [
+    index("transcriptions_meeting_id_idx").on(table.meetingId),
+    index("transcriptions_timestamp_idx").on(table.timestamp),
+]);

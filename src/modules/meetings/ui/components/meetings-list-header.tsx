@@ -45,7 +45,7 @@ export const MeetingsListHeader = () => {
                         <StatusFilter />
                         <AgentIdFilter />
                         {isAnyFilterModified && (
-                            <Button variant="outline" onClick={onClearFilters}>
+                            <Button variant="outline" size="sm" className="h-9" onClick={onClearFilters}>
                                 <XCircleIcon className="size-4" />
                                 Clear
                             </Button>
