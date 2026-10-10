@@ -6,6 +6,7 @@ import { appRouter } from "../src/trpc/routers/_app";
 import { agentsInsertSchema } from "../src/modules/agents/schemas";
 import { meetingsInsertSchema } from "../src/modules/meetings/schemas";
 import http from "node:http";
+import crypto from "node:crypto";
 import { AddressInfo } from "node:net";
 import {
     assertMeetingOwnership,
@@ -19,6 +20,11 @@ import {
     MAX_TRANSCRIPT_CHARS,
 } from "../src/modules/meetings/server/authorization";
 import { POST as webhookHandler } from "../src/app/api/webhook/route";
+import {
+    getGeminiApiKey,
+    getGeminiModel,
+    resetGeminiModelForTesting,
+} from "../src/lib/gemini";
 
 // =========================================================================
 // SECTION 1: Production tRPC Middleware & Authentication Tests
@@ -314,6 +320,20 @@ test("[Unit - AI Sanitizer] AI Safety: Prompt injection defense isolates dialogu
 // Exercises actual production webhook functions and safety mapping
 // =========================================================================
 
+const TEST_STREAM_API_KEY = "test_stream_api_key";
+const TEST_STREAM_SECRET = "test_stream_secret_key";
+process.env.NEXT_PUBLIC_STREAM_VIDEO_API_KEY =
+    process.env.NEXT_PUBLIC_STREAM_VIDEO_API_KEY || TEST_STREAM_API_KEY;
+process.env.STREAM_VIDEO_SECRET_KEY =
+    process.env.STREAM_VIDEO_SECRET_KEY || TEST_STREAM_SECRET;
+
+function computeStreamSignature(body: string, secret = process.env.STREAM_VIDEO_SECRET_KEY || TEST_STREAM_SECRET): string {
+    return crypto
+        .createHmac("sha256", Buffer.from(secret, "utf8"))
+        .update(body)
+        .digest("hex");
+}
+
 test("[Integration - Webhook Route] Rejects incoming webhook POST requests missing Stream signature with 400 Bad Request", async () => {
     const req = new NextRequest("http://localhost:3000/api/webhook", {
         method: "POST",
@@ -325,6 +345,88 @@ test("[Integration - Webhook Route] Rejects incoming webhook POST requests missi
 
     const data = await res.json();
     assert.equal(data.error, "Missing signature");
+});
+
+test("[Integration - Webhook Route] Rejects incoming webhook with invalid documented x-signature header with 401 Unauthorized", async () => {
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+        method: "POST",
+        headers: { "x-signature": "invalid_hex_signature_value" },
+        body: JSON.stringify({ type: "call.session_started" }),
+    });
+
+    const res = await webhookHandler(req);
+    assert.equal(res.status, 401);
+
+    const data = await res.json();
+    assert.equal(data.error, "Invalid signature");
+});
+
+test("[Integration - Webhook Route] Rejects incoming webhook with invalid fallback stream-signature header with 401 Unauthorized", async () => {
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+        method: "POST",
+        headers: { "stream-signature": "invalid_hex_signature_value" },
+        body: JSON.stringify({ type: "call.session_started" }),
+    });
+
+    const res = await webhookHandler(req);
+    assert.equal(res.status, 401);
+
+    const data = await res.json();
+    assert.equal(data.error, "Invalid signature");
+});
+
+test("[Integration - Webhook Route] Verifies webhook successfully using documented x-signature header", async () => {
+    const body = JSON.stringify({ type: "custom.test_event" });
+    const signature = computeStreamSignature(body);
+
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+        method: "POST",
+        headers: { "x-signature": signature },
+        body,
+    });
+
+    const res = await webhookHandler(req);
+    assert.equal(res.status, 200);
+
+    const data = await res.json();
+    assert.equal(data.status, "ok");
+});
+
+test("[Integration - Webhook Route] Verifies webhook successfully using fallback stream-signature header", async () => {
+    const body = JSON.stringify({ type: "custom.test_event" });
+    const signature = computeStreamSignature(body);
+
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+        method: "POST",
+        headers: { "stream-signature": signature },
+        body,
+    });
+
+    const res = await webhookHandler(req);
+    assert.equal(res.status, 200);
+
+    const data = await res.json();
+    assert.equal(data.status, "ok");
+});
+
+test("[Integration - Webhook Route] Prioritizes x-signature header over stream-signature header when both are present", async () => {
+    const body = JSON.stringify({ type: "custom.test_event" });
+    const validSignature = computeStreamSignature(body);
+
+    const req = new NextRequest("http://localhost:3000/api/webhook", {
+        method: "POST",
+        headers: {
+            "x-signature": validSignature,
+            "stream-signature": "bogus_fallback_signature",
+        },
+        body,
+    });
+
+    const res = await webhookHandler(req);
+    assert.equal(res.status, 200);
+
+    const data = await res.json();
+    assert.equal(data.status, "ok");
 });
 
 test("[Unit - Webhook Security] Production SSRF validation: strictly retains only demonstrably required Stream CDN domain in allowlist", () => {
@@ -525,4 +627,96 @@ test("[Unit - Error Handling] Maps Gemini rate limit and timeout errors to safe 
 
     const genericResult = mapGeminiError(new Error("Connection reset"));
     assert.equal(genericResult.code, "INTERNAL_SERVER_ERROR");
+});
+
+// =========================================================================
+// SECTION 6: Gemini AI Configuration & Key Selection Tests
+// =========================================================================
+
+test("[Unit - Gemini AI Config] Selects GEMINI_API_KEY when GOOGLE_API_KEY is not defined", () => {
+    const origGemini = process.env.GEMINI_API_KEY;
+    const origGoogle = process.env.GOOGLE_API_KEY;
+    try {
+        process.env.GEMINI_API_KEY = "test_gemini_key";
+        delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+
+        assert.equal(getGeminiApiKey(), "test_gemini_key");
+        const model = getGeminiModel();
+        assert.ok(model);
+    } finally {
+        if (origGemini !== undefined) process.env.GEMINI_API_KEY = origGemini; else delete process.env.GEMINI_API_KEY;
+        if (origGoogle !== undefined) process.env.GOOGLE_API_KEY = origGoogle; else delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+    }
+});
+
+test("[Unit - Gemini AI Config] Falls back to GOOGLE_API_KEY when GEMINI_API_KEY is not defined", () => {
+    const origGemini = process.env.GEMINI_API_KEY;
+    const origGoogle = process.env.GOOGLE_API_KEY;
+    try {
+        delete process.env.GEMINI_API_KEY;
+        process.env.GOOGLE_API_KEY = "test_google_key";
+        resetGeminiModelForTesting();
+
+        assert.equal(getGeminiApiKey(), "test_google_key");
+        const model = getGeminiModel();
+        assert.ok(model);
+    } finally {
+        if (origGemini !== undefined) process.env.GEMINI_API_KEY = origGemini; else delete process.env.GEMINI_API_KEY;
+        if (origGoogle !== undefined) process.env.GOOGLE_API_KEY = origGoogle; else delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+    }
+});
+
+test("[Unit - Gemini AI Config] Prioritizes GEMINI_API_KEY when both GEMINI_API_KEY and GOOGLE_API_KEY are defined", () => {
+    const origGemini = process.env.GEMINI_API_KEY;
+    const origGoogle = process.env.GOOGLE_API_KEY;
+    try {
+        process.env.GEMINI_API_KEY = "priority_gemini_key";
+        process.env.GOOGLE_API_KEY = "fallback_google_key";
+        resetGeminiModelForTesting();
+
+        assert.equal(getGeminiApiKey(), "priority_gemini_key");
+    } finally {
+        if (origGemini !== undefined) process.env.GEMINI_API_KEY = origGemini; else delete process.env.GEMINI_API_KEY;
+        if (origGoogle !== undefined) process.env.GOOGLE_API_KEY = origGoogle; else delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+    }
+});
+
+test("[Unit - Gemini AI Config] Throws descriptive error when neither GEMINI_API_KEY nor GOOGLE_API_KEY is defined", () => {
+    const origGemini = process.env.GEMINI_API_KEY;
+    const origGoogle = process.env.GOOGLE_API_KEY;
+    try {
+        delete process.env.GEMINI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+
+        assert.throws(
+            () => {
+                getGeminiApiKey();
+            },
+            (err: any) => {
+                assert.ok(err instanceof Error);
+                assert.equal(err.message, "GEMINI_API_KEY or GOOGLE_API_KEY environment variable is not defined");
+                return true;
+            }
+        );
+
+        assert.throws(
+            () => {
+                getGeminiModel();
+            },
+            (err: any) => {
+                assert.ok(err instanceof Error);
+                assert.equal(err.message, "GEMINI_API_KEY or GOOGLE_API_KEY environment variable is not defined");
+                return true;
+            }
+        );
+    } finally {
+        if (origGemini !== undefined) process.env.GEMINI_API_KEY = origGemini; else delete process.env.GEMINI_API_KEY;
+        if (origGoogle !== undefined) process.env.GOOGLE_API_KEY = origGoogle; else delete process.env.GOOGLE_API_KEY;
+        resetGeminiModelForTesting();
+    }
 });

@@ -23,7 +23,8 @@ function verifySignatureWithSDK(body: string, signature: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-    const signature = req.headers.get("stream-signature");
+    const signature =
+        req.headers.get("x-signature") ?? req.headers.get("stream-signature");
     if (!signature) {
         return NextResponse.json({ error: "Missing signature" }, { status: 400 });
     }
