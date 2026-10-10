@@ -1,7 +1,24 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+let _genAI: GoogleGenerativeAI | null = null;
+let _geminiModel: ReturnType<GoogleGenerativeAI["getGenerativeModel"]> | null = null;
 
-export const geminiModel = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+export const getGeminiModel = (): ReturnType<GoogleGenerativeAI["getGenerativeModel"]> => {
+    if (!_geminiModel) {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            throw new Error("GEMINI_API_KEY environment variable is not defined");
+        }
+        _genAI = new GoogleGenerativeAI(apiKey);
+        _geminiModel = _genAI.getGenerativeModel({
+            model: "gemini-2.0-flash",
+        });
+    }
+    return _geminiModel;
+};
+
+export const geminiModel = new Proxy({} as ReturnType<GoogleGenerativeAI["getGenerativeModel"]>, {
+    get(_target, prop, receiver) {
+        return Reflect.get(getGeminiModel(), prop, receiver);
+    },
 });

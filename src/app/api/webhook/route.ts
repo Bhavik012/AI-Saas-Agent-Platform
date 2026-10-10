@@ -12,24 +12,14 @@ import { agents, meetings } from "@/db/schema";
 import { streamVideo } from "@/lib/stream-video";
 import { geminiModel } from "@/lib/gemini";
 import { CallTranscriptionReadyEvent } from "@stream-io/video-react-sdk";
+import {
+    formatTranscriptForSummary,
+    buildSummaryPrompt,
+    isValidTranscriptionUrl,
+} from "@/modules/meetings/server/authorization";
 
 function verifySignatureWithSDK(body: string, signature: string): boolean {
     return streamVideo.verifyWebhook(body, signature);
-}
-
-// SSRF Protection: Validate that URLs are HTTPS and from trusted domains
-function isValidTranscriptionUrl(urlString: string): boolean {
-    try {
-        const parsed = new URL(urlString);
-        if (parsed.protocol !== "https:") return false;
-        // Ensure hostname ends with trusted Stream or CDN domains
-        const validHosts = ["stream-io-cdn.com", "getstream.io", "amazonaws.com"];
-        return validHosts.some(
-            (domain) => parsed.hostname === domain || parsed.hostname.endsWith(`.${domain}`)
-        );
-    } catch {
-        return false;
-    }
 }
 
 export async function POST(req: NextRequest) {
@@ -148,20 +138,13 @@ export async function POST(req: NextRequest) {
             try {
                 const transcriptRes = await fetch(transcriptUrl, {
                     signal: AbortSignal.timeout(10000), // 10s timeout
+                    redirect: "error",
                 });
 
                 if (transcriptRes.ok) {
                     const rawTranscript = await transcriptRes.text();
-                    const boundedTranscript = rawTranscript.slice(0, 30000);
-
-                    const prompt = `You are a professional meeting assistant.
-Summarize this meeting concisely based on the transcript below:
-- Executive Summary (2-3 sentences)
-- Key Decisions
-- Action Items
-
-Transcript:
-${boundedTranscript}`;
+                    const boundedTranscript = formatTranscriptForSummary(rawTranscript);
+                    const prompt = buildSummaryPrompt(boundedTranscript);
 
                     const res = await geminiModel.generateContent(prompt);
                     const summary = res.response.text();

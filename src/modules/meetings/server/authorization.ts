@@ -76,12 +76,14 @@ export function buildLiveKitGrants(meetingId: string) {
 export const MAX_TRANSCRIPT_CHARS = 30000;
 
 export function formatTranscriptForSummary(
-    transcripts: Array<{ text: string; agentId?: string | null }>,
+    transcripts: Array<{ text: string; agentId?: string | null }> | string,
     maxChars = MAX_TRANSCRIPT_CHARS
 ): string {
-    let transcriptText = transcripts
-        .map((t) => `${t.agentId ? "AI Assistant" : "Participant"}: ${t.text}`)
-        .join("\n");
+    let transcriptText = typeof transcripts === "string"
+        ? transcripts
+        : transcripts
+            .map((t) => `${t.agentId ? "AI Assistant" : "Participant"}: ${t.text}`)
+            .join("\n");
 
     if (transcriptText.length > maxChars) {
         transcriptText =
@@ -114,4 +116,62 @@ Produce a concise markdown summary containing:
 <meeting_transcription>
 ${transcriptText}
 </meeting_transcription>`;
+}
+
+/**
+ * Demonstrably required Stream Video CDN host domains used for transcript downloads.
+ * Stream serves transcriptions and recordings exclusively via its CDN infrastructure
+ * (stream-io-cdn.com and regional subdomains like *.stream-io-cdn.com).
+ * General Stream API/marketing domains (getstream.io, stream-io-api.com) and arbitrary
+ * third-party cloud hosts (*.amazonaws.com) are strictly excluded without evidence.
+ */
+export const ALLOWED_TRANSCRIPTION_DOMAINS = [
+    "stream-io-cdn.com",
+] as const;
+
+/**
+ * SSRF Protection: Validates that URLs are HTTPS, use standard port 443,
+ * contain no embedded credentials, and belong strictly to allowlisted Stream domains.
+ */
+export function isValidTranscriptionUrl(urlString: string): boolean {
+    if (typeof urlString !== "string" || !urlString.trim()) {
+        return false;
+    }
+
+    try {
+        const parsed = new URL(urlString);
+
+        // 1. Enforce HTTPS protocol strictly
+        if (parsed.protocol !== "https:") {
+            return false;
+        }
+
+        // 2. Reject URLs containing a username or password
+        if (parsed.username !== "" || parsed.password !== "") {
+            return false;
+        }
+
+        // Reject any credential delimiter (@) in the authority component
+        const authority = urlString.replace(/^https:\/\//i, "").split(/[/?#]/)[0] ?? "";
+        if (authority.includes("@")) {
+            return false;
+        }
+
+        // 3. Reject unexpected ports; allow only the standard HTTPS port (empty or 443)
+        if (parsed.port !== "" && parsed.port !== "443") {
+            return false;
+        }
+
+        // 4. Validate hostname strictly against allowlisted Stream domains
+        const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+        if (!hostname) {
+            return false;
+        }
+
+        return ALLOWED_TRANSCRIPTION_DOMAINS.some(
+            (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+        );
+    } catch {
+        return false;
+    }
 }
